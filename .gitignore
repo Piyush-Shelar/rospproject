@@ -1,5 +1,5 @@
-# Environment variables - NEVER commit these
-.env
+# Environment variables
+# .env is intentionally tracked for this private repo
 .env.local
 .env.production
 
