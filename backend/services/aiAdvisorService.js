@@ -1,18 +1,19 @@
-import OpenAI from 'openai';
+import { GoogleGenAI } from '@google/genai';
 
 // Lazy-initialise so missing key doesn't crash import at startup
-let _openai = null;
+let _ai = null;
 function getClient() {
-  if (!_openai) {
-    if (!process.env.OPENAI_API_KEY) {
-      throw new Error('OPENAI_API_KEY is not set in environment variables');
+  if (!_ai) {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+    if (!apiKey || apiKey === 'key' || apiKey === 'your_gemini_api_key_here') {
+      throw new Error('GEMINI_API_KEY is not set in environment variables');
     }
-    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    _ai = new GoogleGenAI({ apiKey });
   }
-  return _openai;
+  return _ai;
 }
 
-const MODEL = () => process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
 const ADVISOR_SYSTEM_PROMPT = `You are a certified, prudent financial advisor AI assistant embedded in a secure client wealth portal called Amor Wealth.
 
@@ -54,7 +55,7 @@ function buildPortfolioSummary(portfolioData) {
  * @returns {Promise<string>}     - Markdown-formatted analysis from the model
  */
 export async function analyzePortfolio(portfolioData) {
-  const client = getClient();
+  const ai = getClient();
   const summary = buildPortfolioSummary(portfolioData);
 
   const userPrompt = `
@@ -77,17 +78,16 @@ Please provide a structured advisory report covering:
 4. **3 Actionable Rebalancing / Next-Step Recommendations**
 `.trim();
 
-  const response = await client.chat.completions.create({
+  const response = await ai.models.generateContent({
     model: MODEL(),
-    messages: [
-      { role: 'system', content: ADVISOR_SYSTEM_PROMPT },
-      { role: 'user',   content: userPrompt },
-    ],
-    temperature: 0.3,
-    max_tokens: 1200,
+    contents: userPrompt,
+    config: {
+      systemInstruction: ADVISOR_SYSTEM_PROMPT,
+      temperature: 0.3,
+    },
   });
 
-  return response.choices[0].message.content;
+  return response.text;
 }
 
 /**
@@ -98,7 +98,7 @@ Please provide a structured advisory report covering:
  * @returns {Promise<string>}        - Assistant's reply
  */
 export async function handleClientChat(recentHistory, userMessage, portfolioContext = null) {
-  const client = getClient();
+  const ai = getClient();
 
   let contextSnippet = 'The client has not uploaded a portfolio yet.';
   if (portfolioContext) {
@@ -109,18 +109,64 @@ export async function handleClientChat(recentHistory, userMessage, portfolioCont
       `Total Value: $${summary.totalValue}; Unrealised P&L: $${summary.unrealisedPnL} (${summary.pnlPct}%).`;
   }
 
-  const messages = [
-    { role: 'system',    content: `${ADVISOR_SYSTEM_PROMPT}\n\n${contextSnippet}` },
-    ...recentHistory.map(m => ({ role: m.role, content: m.content })),
-    { role: 'user',      content: userMessage },
+  // Format multi-turn conversation history for Gemini: 'user' or 'model'
+  const contents = [
+    ...recentHistory.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    })),
+    {
+      role: 'user',
+      parts: [{ text: userMessage }],
+    },
   ];
 
-  const response = await client.chat.completions.create({
+  const response = await ai.models.generateContent({
     model: MODEL(),
-    messages,
-    temperature: 0.6,
-    max_tokens: 800,
+    contents,
+    config: {
+      systemInstruction: `${ADVISOR_SYSTEM_PROMPT}\n\n${contextSnippet}`,
+      temperature: 0.6,
+    },
   });
 
-  return response.choices[0].message.content;
+  return response.text;
+}
+
+/**
+ * Run an AI portfolio analysis from extracted PDF statement text.
+ * @param {string} pdfText  - Extracted raw text from the decrypted statement
+ * @param {string} filename - Original file name for context
+ * @returns {Promise<string>} - Markdown-formatted advisory report
+ */
+export async function analyzePdfPortfolioText(pdfText, filename = 'Uploaded Statement') {
+  const ai = getClient();
+  const truncatedText = (pdfText || '').slice(0, 12000);
+
+  const userPrompt = `
+You are analyzing an extracted portfolio document / financial statement: "${filename}".
+
+Document Extracted Text (first 12,000 chars):
+---
+${truncatedText}
+---
+
+Please provide a rigorous, structured financial analysis formatted in clear Markdown:
+1. **Executive Summary**: Identify the Total Portfolio NAV, report period/date, account type, and key portfolio metrics mentioned in the statement.
+2. **Asset Allocation Breakdown**: Estimate the breakdown across equities, fixed income/debt, cash, mutual funds, or alternative investments from the text.
+3. **Top Holdings & Performance Highlights**: Highlight key holdings, notable positions, gains/losses, or interest/dividends received.
+4. **Risk Profile & Vulnerabilities**: Identify any sector concentration risks, liquidity concerns, or missing diversification.
+5. **Actionable Rebalancing & Next Steps**: Provide 3-4 concrete, prudent next steps or questions to discuss with a licensed financial advisor.
+`.trim();
+
+  const response = await ai.models.generateContent({
+    model: MODEL(),
+    contents: userPrompt,
+    config: {
+      systemInstruction: ADVISOR_SYSTEM_PROMPT,
+      temperature: 0.3,
+    },
+  });
+
+  return response.text;
 }

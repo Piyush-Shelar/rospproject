@@ -6,6 +6,7 @@ import {
   Wallet, CircleDot
 } from 'lucide-react';
 import ClientNavbar from '../../components/ClientNavbar';
+import MarkdownRenderer from '../../components/MarkdownRenderer';
 import { useAuth } from '../../context/AuthContext';
 
 /* ── helpers ─────────────────────────────────────── */
@@ -37,24 +38,8 @@ function Spinner() {
   return <Loader2 size={16} className="animate-spin inline-block" />;
 }
 
-/* ── Markdown-lite renderer (bold + bullets) ─────── */
 function MarkdownText({ text }) {
-  if (!text) return null;
-  const lines = text.split('\n');
-  return (
-    <div className="space-y-1 text-sm leading-relaxed">
-      {lines.map((line, i) => {
-        // Bold **text**
-        const rendered = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        if (line.startsWith('# '))  return <p key={i} className="font-bold text-base mt-2" dangerouslySetInnerHTML={{ __html: rendered.slice(2) }} />;
-        if (line.startsWith('## ')) return <p key={i} className="font-semibold text-sm mt-2 text-navy-800" dangerouslySetInnerHTML={{ __html: rendered.slice(3) }} />;
-        if (line.startsWith('- ') || line.startsWith('• ')) return <li key={i} className="ml-4 list-disc" dangerouslySetInnerHTML={{ __html: rendered.slice(2) }} />;
-        if (/^\d+\./.test(line)) return <li key={i} className="ml-4 list-decimal" dangerouslySetInnerHTML={{ __html: rendered }} />;
-        if (line.trim() === '') return <div key={i} className="h-1" />;
-        return <p key={i} dangerouslySetInnerHTML={{ __html: rendered }} />;
-      })}
-    </div>
-  );
+  return <MarkdownRenderer content={text} />;
 }
 
 /* ─────────────────────────────────────────────────

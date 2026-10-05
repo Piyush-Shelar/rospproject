@@ -83,7 +83,7 @@ router.post('/portfolio/analyze', async (req, res) => {
     const analysis = await analyzePortfolio(portfolio);
     return res.status(200).json({ analysis });
   } catch (err) {
-    if (err.message.includes('OPENAI_API_KEY')) {
+    if (err.message && err.message.includes('API_KEY')) {
       return res.status(503).json({ error: 'AI service is not configured. Contact your administrator.' });
     }
     return res.status(500).json({ error: 'Portfolio analysis failed: ' + err.message });
@@ -130,7 +130,7 @@ router.post('/chat', async (req, res) => {
 
     return res.status(200).json({ reply: assistantReply });
   } catch (err) {
-    if (err.message.includes('OPENAI_API_KEY')) {
+    if (err.message && err.message.includes('API_KEY')) {
       return res.status(503).json({ error: 'AI service is not configured. Contact your administrator.' });
     }
     return res.status(500).json({ error: 'Chat failed: ' + err.message });

@@ -1,9 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import {
   X, ShieldCheck, AlertTriangle, Lock, FileText,
-  Download, ZoomIn, ZoomOut, Loader, Hash
+  Download, ZoomIn, ZoomOut, Loader, Hash,
+  Sparkles, Bot, ChevronDown, ChevronUp, RefreshCw
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import MarkdownRenderer from './MarkdownRenderer';
+
+function MarkdownText({ text }) {
+  return <MarkdownRenderer content={text} />;
+}
 
 function StepRow({ label, done, active }) {
   return (
@@ -35,6 +41,36 @@ export default function VerifyAndViewModal({ doc, onClose }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [pdfScale, setPdfScale] = useState(1);
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState('');
+  const [isAnalysisExpanded, setIsAnalysisExpanded] = useState(true);
+
+  const handleAnalyzePdf = async () => {
+    if (!doc || !accessToken || isAnalyzing) return;
+    setIsAnalyzing(true);
+    setAnalysisError('');
+    try {
+      const res = await fetch(`/api/documents/${doc._id}/analyze-pdf`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAnalysisError(data.error || 'Failed to analyze portfolio statement.');
+      } else {
+        setAiAnalysis(data.analysis);
+        setIsAnalysisExpanded(true);
+      }
+    } catch {
+      setAnalysisError('Unable to reach server. Please check your connection.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   const steps = [
     'Decapsulating RSA-wrapped AES session key...',
@@ -184,6 +220,26 @@ export default function VerifyAndViewModal({ doc, onClose }) {
                   <p className="text-sm font-bold text-teal-700">Integrity Verified: SHA-256 Valid ✓</p>
                   <p className="text-[11px] font-mono text-teal-600/70 mt-0.5 break-all">{result.sha256}</p>
                 </div>
+                {result.documentType === 'PORTFOLIO' && (
+                  <button
+                    onClick={handleAnalyzePdf}
+                    disabled={isAnalyzing}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-white bg-gradient-to-r from-navy-800 to-teal-700 hover:from-navy-900 hover:to-teal-800 px-3 py-1.5 rounded-lg shadow-sm transition-all flex-shrink-0 disabled:opacity-60"
+                    title="Extract and analyze portfolio holdings with AI"
+                  >
+                    {isAnalyzing ? (
+                      <>
+                        <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Analyzing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={13} className="text-teal-300" />
+                        <span>Analyze with AI</span>
+                      </>
+                    )}
+                  </button>
+                )}
                 <button
                   onClick={handleDownload}
                   className="flex items-center gap-1.5 text-xs font-semibold text-teal-700 bg-white border border-teal-300 hover:bg-teal-50 px-3 py-1.5 rounded-lg transition-all flex-shrink-0"
@@ -283,6 +339,79 @@ export default function VerifyAndViewModal({ doc, onClose }) {
                   </div>
                 )}
               </div>
+
+              {/* AI Portfolio Statement Analysis Section */}
+              {(isAnalyzing || aiAnalysis || analysisError) && (
+                <div className="mt-5 rounded-xl border border-teal-200/80 bg-gradient-to-b from-teal-50/40 via-white to-white overflow-hidden shadow-sm animate-fade-in">
+                  <div className="flex items-center justify-between px-4 py-3 bg-teal-50/80 border-b border-teal-100">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-teal-600 flex items-center justify-center text-white">
+                        <Bot size={14} />
+                      </div>
+                      <span className="text-xs font-bold text-navy-900 flex items-center gap-1.5">
+                        AI Portfolio Statement Analysis
+                        <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-teal-100 text-teal-800 rounded-md">
+                          Gemini 3.8 Flash
+                        </span>
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {aiAnalysis && !isAnalyzing && (
+                        <button
+                          onClick={handleAnalyzePdf}
+                          className="px-2 py-1 rounded hover:bg-teal-100 text-teal-700 text-xs flex items-center gap-1 font-medium transition-colors"
+                          title="Re-run Analysis"
+                        >
+                          <RefreshCw size={12} />
+                          <span className="hidden sm:inline">Refresh</span>
+                        </button>
+                      )}
+                      {aiAnalysis && (
+                        <button
+                          onClick={() => setIsAnalysisExpanded(!isAnalysisExpanded)}
+                          className="p-1 rounded hover:bg-teal-100 text-teal-700 transition-colors"
+                          title={isAnalysisExpanded ? 'Collapse' : 'Expand'}
+                        >
+                          {isAnalysisExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {isAnalyzing && (
+                    <div className="p-6 flex flex-col items-center justify-center text-center">
+                      <div className="w-8 h-8 border-3 border-teal-200 border-t-teal-600 rounded-full animate-spin mb-3" />
+                      <p className="text-xs font-semibold text-navy-900">Extracting PDF text and generating portfolio advisory...</p>
+                      <p className="text-[11px] text-gray-500 mt-1">Evaluating asset allocation, top positions, risk balance & rebalancing</p>
+                    </div>
+                  )}
+
+                  {analysisError && !isAnalyzing && (
+                    <div className="p-4 bg-amber-50 border-t border-amber-200 text-xs text-amber-800 flex items-start gap-2">
+                      <AlertTriangle size={15} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="font-semibold mb-0.5">Statement Analysis Error</p>
+                        <p>{analysisError}</p>
+                      </div>
+                      <button
+                        onClick={handleAnalyzePdf}
+                        className="px-2.5 py-1 bg-white border border-amber-300 rounded text-amber-900 font-semibold hover:bg-amber-100 transition-colors"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
+                  {aiAnalysis && !isAnalyzing && isAnalysisExpanded && (
+                    <div className="p-5 max-h-[500px] overflow-y-auto">
+                      <MarkdownText text={aiAnalysis} />
+                      <div className="mt-4 pt-3 border-t border-gray-100 text-[11px] text-gray-400 italic">
+                        Analysis generated via Google Gemini 3.8 Flash based on in-memory decrypted statement text.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="mt-4 p-3 bg-surface border border-border rounded-xl flex items-start gap-2">
                 <Hash size={13} className="text-gray-400 mt-0.5 flex-shrink-0" />

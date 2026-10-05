@@ -6,7 +6,12 @@ import SecurityEvent from '../models/SecurityEvent.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { computeSHA256, encryptDocument, decryptDocument, verifyIntegrity } from '../services/cryptoService.js';
 import { getAdvisorPublicKey, getAdvisorPrivateKey } from '../services/keyService.js';
+import { analyzePdfPortfolioText } from '../services/aiAdvisorService.js';
 import crypto from 'crypto';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const pdfParse = require('pdf-parse');
 
 const router = express.Router();
 
@@ -368,6 +373,116 @@ router.get('/:id/verify-and-view', authenticate, async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ error: 'Verify and view failed: ' + err.message });
+  }
+});
+
+router.post('/:id/analyze-pdf', authenticate, async (req, res) => {
+  try {
+    const doc = await Document.findById(req.params.id).select('+isHoneypot');
+    if (!doc) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    if (doc.isHoneypot) {
+      await SecurityEvent.create({
+        userId: req.user.id,
+        clientId: doc.clientId,
+        documentId: doc._id,
+        eventType: 'HONEYPOT_TRIGGERED',
+        severity: 'CRITICAL',
+        ipAddress: req.ip || req.socket?.remoteAddress,
+        userAgent: req.headers['user-agent'],
+        details: { message: 'Unauthorized interaction with trapped decoy asset (analyze-pdf attempt)', filename: doc.originalFilename },
+      });
+      await User.findByIdAndUpdate(req.user.id, {
+        isLocked: true,
+        lockReason: 'Automated containment: Honeypot tripwire triggered',
+      });
+      return res.status(403).json({ error: 'Access denied: Security verification failed' });
+    }
+
+    if (doc.documentType !== 'PORTFOLIO') {
+      return res.status(400).json({ error: 'AI analysis is only available for PORTFOLIO documents' });
+    }
+
+    let encryptedKeyEnvelope;
+    let privateKeyPem;
+
+    if (req.user.role === 'client') {
+      if (doc.clientId.toString() !== req.user.id) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+      encryptedKeyEnvelope = doc.encryptedAESKey;
+      privateKeyPem = getAdvisorPrivateKey();
+    } else if (req.user.role === 'admin') {
+      const grant = doc.accessGrants.find(
+        g => g.advisorId.toString() === req.user.id && g.status === 'ACTIVE'
+      );
+      if (!grant) {
+        return res.status(403).json({
+          error: 'Access denied: Document not shared with your advisor account',
+        });
+      }
+      encryptedKeyEnvelope = grant.encryptedAESKey;
+      const advisor = await User.findById(req.user.id).select('rsaPrivateKeyPem');
+      if (!advisor || !advisor.rsaPrivateKeyPem) {
+        return res.status(500).json({ error: 'Advisor private key not found' });
+      }
+      privateKeyPem = advisor.rsaPrivateKeyPem;
+    } else {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    let decryptedBuffer;
+    try {
+      decryptedBuffer = decryptDocument(
+        doc.encryptedBlob,
+        doc.iv,
+        doc.authTag,
+        encryptedKeyEnvelope,
+        privateKeyPem
+      );
+    } catch (err) {
+      if (err.code === 'CIPHERTEXT_AUTH_FAILED') {
+        return res.status(400).json({
+          error: 'GCM authentication tag mismatch. Ciphertext corrupted or altered in storage.',
+          tamperDetected: true,
+        });
+      }
+      return res.status(500).json({ error: 'Decryption failed: ' + err.message });
+    }
+
+    const { isValid } = verifyIntegrity(decryptedBuffer, doc.sha256Hash);
+    if (!isValid) {
+      return res.status(400).json({
+        error: 'SHA-256 baseline digest mismatch. Document integrity compromised.',
+        tamperDetected: true,
+      });
+    }
+
+    let pdfData;
+    try {
+      pdfData = await pdfParse(decryptedBuffer);
+    } catch (parseErr) {
+      return res.status(422).json({
+        error: 'Failed to extract text from PDF document: ' + parseErr.message,
+      });
+    }
+
+    const rawText = (pdfData?.text || '').trim();
+    if (rawText.length < 50) {
+      return res.status(422).json({
+        error: 'Extracted PDF text is insufficient for analysis (less than 50 characters). Please ensure the document is a text-based PDF statement.',
+      });
+    }
+
+    const analysis = await analyzePdfPortfolioText(rawText, doc.originalFilename);
+    return res.status(200).json({ analysis, status: 'SUCCESS' });
+  } catch (err) {
+    if (err.message && err.message.includes('API_KEY')) {
+      return res.status(503).json({ error: 'AI advisor service is not configured. Contact your administrator.' });
+    }
+    return res.status(500).json({ error: 'Portfolio statement analysis failed: ' + err.message });
   }
 });
 
